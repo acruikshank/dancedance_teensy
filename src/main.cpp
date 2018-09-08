@@ -1,12 +1,11 @@
 #include <Arduino.h>
 #include <OctoWS2811.h>
 
-#define BAND_WIDTH 1.0
-
 #define TOTAL_STRIPS 50
 #define NUM_STRIPS 8
 #define NUM_LEDS 50
 #define CONTROLED_LEDS 400
+#define DELAY 17
 
 // states
 #define INIT 0
@@ -78,6 +77,7 @@ OctoWS2811 leds(NUM_LEDS, displayMemory, drawingMemory, config);
 
 int rainbowColors[180];
 
+long lastRender = millis();
 long lastDrumHit[] = {0,0,0,0,0};
 int32_t drumColors[] = {0xfe00000, 0xf9fe000, 0x00fe030, 0x0003fe0, 0x9d00fe0};
 int cycle = 0;
@@ -86,7 +86,6 @@ int cymbol = 0;
 long lastCymbolHit = 0;
 
 int pump = 0;
-long lastPumpEvent = 0;
 
 int state = INIT;
 
@@ -188,7 +187,6 @@ void readData() {
         switch (parameter) {
           case PUMP_PARAMETER:
             pump = value;
-            lastPumpEvent = millis();
           default:
             resetCommand(); break;
         }
@@ -249,7 +247,7 @@ void draw() {
     for(uint16_t i=0; i<NUM_LEDS; i++) {
       float dist = distances[xoffset + i];
 
-      int pumpColor = rainbowColors[abs((int) (dist*PUMP_FREQ - (millis()-lastPumpEvent) * PUMP_RATE + cycle*PUMP_CYCLE_RATE))%180];
+      int pumpColor = rainbowColors[abs((int) (dist*PUMP_FREQ - (millis()-lastCymbolHit) * PUMP_RATE + cycle*PUMP_CYCLE_RATE))%180];
       int baseColor = mixColor(map(pump,0,255,0,1000), 0x808080, pumpColor);
       int pedalVal = (int) (500.0*(1.0+sin(CYCLE_FREQ*cycle + phases[xoffset + i])));
       uint32_t color = mixColor(pedalVal, 0x000000, baseColor);
@@ -292,7 +290,12 @@ void draw() {
     }
   }
 
-  // TODO: Delay here?
+  long delayTime = DELAY - (millis() - lastRender);
+  if (delayTime > 0) {
+    delay(delayTime);
+  }
+  lastRender = millis();
+  
   leds.show();
 }
 
