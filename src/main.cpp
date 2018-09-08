@@ -20,12 +20,13 @@
 #define OFFSET_PARAMETER 0
 
 #define CYCLE_COMMAND 1
-#define COUNT_PARAMETER 0
+#define CYCLE_PARAMETER 0
 
 #define DRUM_COMMAND 2
 #define DRUM_PARAMETER 0
 
 #define CYMBOLS_COMMAND 3
+#define CYMBOLS_PARAMETER 0
 
 #define PUMP_COMMAND 4
 #define PUMP_PARAMETER 0
@@ -44,12 +45,12 @@
 #define DRUM_RATE 0.13
 #define DRUM_BORDER 10.0
 
-#define CYMBOL_ATTACK 200
-#define CYMBOL_DECAY 2000
-#define CYMBOL_FREQ .0002
+#define CYMBOL_DECAY 5000
+#define CYMBOL_SUSTAIN 500
+#define CYMBOL_FREQ .0008
 #define R_PHASE -.012
-#define G_PHASE -.028
-#define B_PHASE -.025
+#define G_PHASE -.0128
+#define B_PHASE -.0132
 
 #define color(r,g,b) (((r)<<16) + ((g)<<8) + (b))
 #define colorMap(val,r,g,b) color(max(0,map(val,0,1000,-(r)/2,(r))),max(0,map(val,0,1000,-(g)/2,(g))),max(0,map(val,0,1000,-(b)/2,(b))))
@@ -62,8 +63,7 @@
 #define mixColor(x,c1,c2) color(map(x,0,1000,fromRed(c1),fromRed(c2)), map(x,0,1000,fromGreen(c1),fromGreen(c2)), map(x,0,1000,fromBlue(c1),fromBlue(c2)))
 
 // TODO:
-// Pump as saturation/hue shift
-// Stomp as Color bloom
+// set delay
 
 float distances[CONTROLED_LEDS];
 float phases[CONTROLED_LEDS];
@@ -77,15 +77,16 @@ const int config = WS2811_GRB | WS2811_800kHz;
 OctoWS2811 leds(NUM_LEDS, displayMemory, drawingMemory, config);
 
 int rainbowColors[180];
-int currentColor = 0;
-float cycleWidth = BAND_WIDTH * M_PI / 2.0;
-long spitStart = 0;
 
 long lastDrumHit[] = {0,0,0,0,0};
-long lastCymbolHit = 0;
 int32_t drumColors[] = {0xfe00000, 0xf9fe000, 0x00fe030, 0x0003fe0, 0x9d00fe0};
-int count = 0;
+int cycle = 0;
+
+int cymbol = 0;
+long lastCymbolHit = 0;
+
 int pump = 0;
+long lastPumpEvent = 0;
 
 int state = INIT;
 
@@ -96,16 +97,14 @@ int parameter = NO_PARAMETER;
 // parameters
 int offset = 0;
 
-unsigned int h2rgb(unsigned int v1, unsigned int v2, unsigned int hue)
-{
+unsigned int h2rgb(unsigned int v1, unsigned int v2, unsigned int hue) {
 	if (hue < 60) return v1 * 60 + (v2 - v1) * hue;
 	if (hue < 180) return v2 * 60;
 	if (hue < 240) return v1 * 60 + (v2 - v1) * (240 - hue);
 	return v1 * 60;
 }
 
-int makeColor(unsigned int hue, unsigned int saturation, unsigned int lightness)
-{
+int makeColor(unsigned int hue, unsigned int saturation, unsigned int lightness) {
 	unsigned int red, green, blue;
 	unsigned int var1, var2;
 
@@ -157,14 +156,7 @@ void readData() {
     switch (command) {
       case NO_COMMAND:
         command = value;
-        switch (command) {
-          case CYMBOLS_COMMAND:
-            lastCymbolHit = millis();
-            resetCommand(); break;
-            break;
-          default:
-            parameter = 0;
-        }
+        parameter = 0;
         break;
       case INIT_COMMAND:
         switch (parameter) {
@@ -178,8 +170,8 @@ void readData() {
         break;
       case CYCLE_COMMAND:
         switch (parameter) {
-          case COUNT_PARAMETER:
-            count = value * CYCLE_ADV;
+          case CYCLE_PARAMETER:
+            cycle = value * CYCLE_ADV;
           default:
             resetCommand(); break;
         }
@@ -196,6 +188,16 @@ void readData() {
         switch (parameter) {
           case PUMP_PARAMETER:
             pump = value;
+            lastPumpEvent = millis();
+          default:
+            resetCommand(); break;
+        }
+        break;
+      case CYMBOLS_COMMAND:
+        switch (parameter) {
+          case CYMBOLS_PARAMETER:
+            cymbol = value;
+            lastCymbolHit = millis();
           default:
             resetCommand(); break;
         }
@@ -224,15 +226,21 @@ long attackDecay(long time, long attack, long decay) {
     return map(time, 0, attack, 0, 1000);
   if (time < attack+decay) {
     int val = (int) (1000.0 * (time-attack) / decay);
-    return map(val, 0, 1000, 1000, 0.0);
+    return map(val, 0, 1000, 1000, 0);
   }
   return 0;
 }
 
 void draw() {
   long cymbolTime = millis()-lastCymbolHit;
-  int env = attackDecay(cymbolTime, CYMBOL_ATTACK, CYMBOL_DECAY);
-  float cfreq = CYMBOL_FREQ * attackDecay(cymbolTime, 0, 2*CYMBOL_ATTACK+CYMBOL_DECAY) / 1000.0;
+  int env = 0;
+  int cymbolDecay = map(cymbol, 0, 255, 0, CYMBOL_DECAY);
+  int cymbolSustain = map(cymbol, 0, 255, 0, CYMBOL_SUSTAIN);
+  if (cymbolTime < cymbolDecay) {
+    int val = (int) (1000.0 * cymbolTime / cymbolDecay);
+    env = map(val, 0, 1000, 1000, 0);
+  }
+  float cfreq = CYMBOL_FREQ * attackDecay(cymbolTime, 0, 2*cymbolDecay) / 1000.0;
 
   for(uint8_t column=0; column<8; column++) {
     int x = column;
@@ -241,11 +249,9 @@ void draw() {
     for(uint16_t i=0; i<NUM_LEDS; i++) {
       float dist = distances[xoffset + i];
 
-      int pumpColor = rainbowColors[abs((int) (dist*PUMP_FREQ - millis() * PUMP_RATE + count*PUMP_CYCLE_RATE))%180];
+      int pumpColor = rainbowColors[abs((int) (dist*PUMP_FREQ - (millis()-lastPumpEvent) * PUMP_RATE + cycle*PUMP_CYCLE_RATE))%180];
       int baseColor = mixColor(map(pump,0,255,0,1000), 0x808080, pumpColor);
-      // int pedalVal = 1000 - abs(40*((2*i+count)%50) - 1000);
-      // int32_t color = colorMap(pedalVal, r, g, b);
-      int pedalVal = (int) (500.0*(1.0+sin(CYCLE_FREQ*count + phases[xoffset + i])));
+      int pedalVal = (int) (500.0*(1.0+sin(CYCLE_FREQ*cycle + phases[xoffset + i])));
       uint32_t color = mixColor(pedalVal, 0x000000, baseColor);
 
       for(uint8_t drum=0; drum<5; drum++) {
@@ -272,13 +278,14 @@ void draw() {
       // combine colors something like this:
       if (env > 0) {
         // this is not actually mixing to zero
-        int rval = (int) (env*sin((cfreq*dist + R_PHASE)*cymbolTime));
-        int gval = (int) (env*sin((cfreq*dist + G_PHASE)*cymbolTime));
-        int bval = (int) (env*sin((cfreq*dist + B_PHASE)*cymbolTime));
-        uint32_t r = rval > 0 ? asRed(map(rval,0,1000,fromRed(color), 0xFF)) : asRed(map(-rval,0,1000,fromRed(color), 0x00));
-        uint32_t g = gval > 0 ? asGreen(map(gval,0,1000,fromGreen(color), 0xFF)) : asGreen(map(-gval,0,1000,fromGreen(color), 0x00));
-        uint32_t b = bval > 0 ? asBlue(map(bval,0,1000,fromBlue(color), 0xFF)) : asBlue(map(-bval,0,1000,fromBlue(color), 0x00));
-        color = r | g | b;
+        int rval = (int) (env*cos((cfreq*dist + R_PHASE)*cymbolTime));
+        int gval = (int) (env*cos((cfreq*dist + G_PHASE)*cymbolTime));
+        int bval = (int) (env*cos((cfreq*dist + B_PHASE)*cymbolTime));
+        uint32_t r = rval < 0 ? 0xff0000 : 0x000000;
+        uint32_t g = gval < 0 ? 0x00ff00 : 0x000000;
+        uint32_t b = bval < 0 ? 0x0000ff : 0x000000;
+        uint32_t stompColor = r | g | b;
+        color = cymbolTime < cymbolSustain ? stompColor : mixColor(map(cymbolTime,cymbolSustain,cymbolDecay,0,1000), stompColor, color);
       }
 
       leds.setPixel(i+column*NUM_LEDS, color);
@@ -288,38 +295,6 @@ void draw() {
   // TODO: Delay here?
   leds.show();
 }
-
-// void draw() {
-//   float centerx = 3.5;
-//   float centery = (ledsPerStrip-1.0) / 2.0;
-//   long deltat = millis() - spitStart;
-//   float pulse = pow(deltat * .002, 1.8) + 1.0;
-//
-//   int color = rainbowColors[currentColor];
-//   currentColor = (currentColor+1) % 180;
-//   int r = color >> 16;
-//   int g = (color & 0xff00) >> 8;
-//   int b = color & 0xff;
-//
-//   for (int x=0; x < 8; x++) {
-//     for (int y=0; y < ledsPerStrip; y++) {
-//       float dx = x-centerx, dy= y-centery;
-//       float doff = sqrt(dx*dx + dy*dy) - pulse;
-//       if (abs(doff) <= cycleWidth) {
-//         float bright = abs(cos(doff/BAND_WIDTH));
-//         leds.setPixel(x*ledsPerStrip + y,
-//           (((int) (bright*r)) << 16)
-//           + (((int) (bright*g)) << 8)
-//           + ((int) (bright*b))
-//         );
-//       } else {
-//         leds.setPixel(x*ledsPerStrip + y, 0);
-//       }
-//     }
-//   }
-//   leds.show();
-//   delay(5);
-// }
 
 void runInteractive() {
   readData();
