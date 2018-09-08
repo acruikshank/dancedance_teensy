@@ -27,14 +27,21 @@
 
 #define CYMBOLS_COMMAND 3
 
+#define PUMP_COMMAND 4
+#define PUMP_PARAMETER 0
+#define PUMP_FREQ .4
+#define PUMP_RATE .01
+// 180/256
+#define PUMP_CYCLE_RATE 0.703125
+
 #define CYCLE_ADV 1
 // 2*pi/256
 #define CYCLE_FREQ 0.0245436926
 
 #define DRUM_TIME 200
 #define DRUM_SUSTAIN 150
-#define DRUM_INIT_RADIUS 10.0
-#define DRUM_RATE 0.25
+#define DRUM_INIT_RADIUS 30.0
+#define DRUM_RATE 0.13
 #define DRUM_BORDER 10.0
 
 #define CYMBOL_ATTACK 200
@@ -55,8 +62,6 @@
 #define mixColor(x,c1,c2) color(map(x,0,1000,fromRed(c1),fromRed(c2)), map(x,0,1000,fromGreen(c1),fromGreen(c2)), map(x,0,1000,fromBlue(c1),fromBlue(c2)))
 
 // TODO:
-// Phase/Distance maps
-// Drums as offset circles
 // Pump as saturation/hue shift
 // Stomp as Color bloom
 
@@ -80,6 +85,8 @@ long lastDrumHit[] = {0,0,0,0,0};
 long lastCymbolHit = 0;
 int32_t drumColors[] = {0xfe00000, 0xf9fe000, 0x00fe030, 0x0003fe0, 0x9d00fe0};
 int count = 0;
+int pump = 0;
+
 int state = INIT;
 
 // commands
@@ -185,6 +192,14 @@ void readData() {
             resetCommand(); break;
         }
         break;
+      case PUMP_COMMAND:
+        switch (parameter) {
+          case PUMP_PARAMETER:
+            pump = value;
+          default:
+            resetCommand(); break;
+        }
+        break;
       default:
         resetCommand(); break;
     }
@@ -195,7 +210,7 @@ void setup() {
   for (int i=0; i<180; i++) {
     int hue = i * 2;
     int saturation = 100;
-    int lightness = 10;
+    int lightness = 50;
     // pre-compute the 180 rainbow colors
     rainbowColors[i] = makeColor(hue, saturation, lightness);
   }
@@ -218,13 +233,16 @@ void draw() {
   long cymbolTime = millis()-lastCymbolHit;
   int env = attackDecay(cymbolTime, CYMBOL_ATTACK, CYMBOL_DECAY);
   float cfreq = CYMBOL_FREQ * attackDecay(cymbolTime, 0, 2*CYMBOL_ATTACK+CYMBOL_DECAY) / 1000.0;
-  int baseColor = 0x808080;
 
   for(uint8_t column=0; column<8; column++) {
     int x = column;
     int xoffset = x * NUM_LEDS;
 
     for(uint16_t i=0; i<NUM_LEDS; i++) {
+      float dist = distances[xoffset + i];
+
+      int pumpColor = rainbowColors[abs((int) (dist*PUMP_FREQ - millis() * PUMP_RATE + count*PUMP_CYCLE_RATE))%180];
+      int baseColor = mixColor(map(pump,0,255,0,1000), 0x808080, pumpColor);
       // int pedalVal = 1000 - abs(40*((2*i+count)%50) - 1000);
       // int32_t color = colorMap(pedalVal, r, g, b);
       int pedalVal = (int) (500.0*(1.0+sin(CYCLE_FREQ*count + phases[xoffset + i])));
@@ -254,7 +272,6 @@ void draw() {
       // combine colors something like this:
       if (env > 0) {
         // this is not actually mixing to zero
-        float dist = distances[xoffset + i];
         int rval = (int) (env*sin((cfreq*dist + R_PHASE)*cymbolTime));
         int gval = (int) (env*sin((cfreq*dist + G_PHASE)*cymbolTime));
         int bval = (int) (env*sin((cfreq*dist + B_PHASE)*cymbolTime));
