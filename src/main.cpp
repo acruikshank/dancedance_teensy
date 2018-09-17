@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <OctoWS2811.h>
 
-#define TOTAL_STRIPS 50
+#define TOTAL_STRIPS 40
 #define NUM_STRIPS 8
 #define NUM_LEDS 50
 #define CONTROLED_LEDS 400
@@ -10,6 +10,8 @@
 // states
 #define INIT 0
 #define ACTIVE 1
+#define SCREEN_SAVER_1 2
+#define SCREEN_SAVER_2 3
 
 // commands
 #define NO_COMMAND -1
@@ -34,9 +36,12 @@
 // 180/256
 #define PUMP_CYCLE_RATE 0.703125
 
+#define SCREEN_SAVER_COMMAND 5
+#define SCREEN_SAVER_PARAMETER 0
+
 #define CYCLE_ADV 1
 // 2*pi/256
-#define CYCLE_FREQ 0.0245436926
+#define CYCLE_FREQ -0.0981747704
 
 #define DRUM_TIME 200
 #define DRUM_SUSTAIN 150
@@ -70,15 +75,16 @@ float drumDistances[CONTROLED_LEDS*5];
 DMAMEM int displayMemory[NUM_LEDS*6];
 int drawingMemory[NUM_LEDS*6];
 
-const int config = WS2811_GRB | WS2811_800kHz;
+const int config = WS2811_RGB | WS2811_800kHz;
 
 OctoWS2811 leds(NUM_LEDS, displayMemory, drawingMemory, config);
 
 int rainbowColors[180];
 
 long lastRender = millis();
+long initTime = 0;
 long lastDrumHit[] = {0,0,0,0,0};
-int32_t drumColors[] = {0xfe00000, 0xf9fe000, 0x00fe030, 0x0003fe0, 0x9d00fe0};
+int32_t drumColors[] = {0xfe0000, 0xf9fe00, 0x00fe30, 0x0003fe, 0x9d00fe};
 int cycle = 0;
 
 int cymbol = 0;
@@ -158,7 +164,7 @@ void precompute() {
 }
 
 void readData() {
-  if (Serial.available()) {
+  while (Serial.available()) {
     int value = Serial.read();
     switch (command) {
       case NO_COMMAND:
@@ -168,6 +174,7 @@ void readData() {
       case INIT_COMMAND:
         switch (parameter) {
           case OFFSET_PARAMETER:
+            initTime = millis();
             offset = value;
             precompute();
             state = ACTIVE;
@@ -179,6 +186,7 @@ void readData() {
         switch (parameter) {
           case CYCLE_PARAMETER:
             cycle = value * CYCLE_ADV;
+            state = ACTIVE;
           default:
             resetCommand(); break;
         }
@@ -187,6 +195,7 @@ void readData() {
         switch (parameter) {
           case DRUM_PARAMETER:
             lastDrumHit[value] = millis();
+            state = ACTIVE;
           default:
             resetCommand(); break;
         }
@@ -195,6 +204,7 @@ void readData() {
         switch (parameter) {
           case PUMP_PARAMETER:
             pump = value;
+            state = ACTIVE;
           default:
             resetCommand(); break;
         }
@@ -204,6 +214,19 @@ void readData() {
           case CYMBOLS_PARAMETER:
             cymbol = value;
             lastCymbolHit = millis();
+            state = ACTIVE;
+          default:
+            resetCommand(); break;
+        }
+        break;
+      case SCREEN_SAVER_COMMAND:
+        switch (value) {
+          case 0:
+            state = SCREEN_SAVER_1;
+            resetCommand(); break;
+          case 1:
+            state = SCREEN_SAVER_2;
+            resetCommand(); break;
           default:
             resetCommand(); break;
         }
@@ -224,6 +247,19 @@ void setup() {
   }
 
   leds.begin();
+
+  for (int i=0; i<CONTROLED_LEDS; i++) {
+    leds.setPixel(i, 0x008800);
+  }
+  leds.show();
+
+  delay(1000);
+
+  for (int i=0; i<CONTROLED_LEDS; i++) {
+    leds.setPixel(i, 0);
+  }
+  leds.show();
+
   Serial.begin(9600);
 }
 
@@ -342,7 +378,6 @@ void drawLogo1() {
 void drawLogo2() {
   float fade = .9;
 
-
   for(uint8_t column=0; column<NUM_STRIPS; column++) {
     int x = column;
     int xoffset = x * NUM_LEDS;
@@ -374,16 +409,34 @@ void drawLogo2() {
   leds.show();
 }
 
-void runInteractive() {
-  // drawLogo2();
-  readData();
-  draw();
+void drawTest() {
+  for(uint8_t column=0; column<NUM_STRIPS; column++) {
+    int x = column;
+    int xoffset = x * NUM_LEDS;
+
+    for(uint16_t i=0; i<NUM_LEDS; i++) {
+      leds.setPixel(xoffset + i, ((millis() - initTime) / 1000)%TOTAL_STRIPS == x+offset ? 0xFF0000 : 0x003300);
+    }
+  }
+
+  long delayTime = DELAY - (millis() - lastRender);
+  if (delayTime > 0) {
+    delay(delayTime);
+  }
+  lastRender = millis();
+
+  leds.show();
 }
 
 void loop() {
+  readData();
   if (state==INIT) {
-    readData();
+    delay(1);
   } else if (state==ACTIVE) {
-    runInteractive();
+    draw();
+  } else if (state==SCREEN_SAVER_1) {
+    drawLogo1();
+  } else if (state==SCREEN_SAVER_2) {
+    drawLogo2();
   }
 }
