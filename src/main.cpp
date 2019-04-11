@@ -20,38 +20,14 @@
 #define NO_PARAMETER -1
 #define OFFSET_PARAMETER 0
 
-#define CYCLE_COMMAND 1
-#define CYCLE_PARAMETER 0
-
-#define DRUM_COMMAND 2
-#define DRUM_PARAMETER 0
-
-#define CYMBOLS_COMMAND 3
-#define CYMBOLS_PARAMETER 0
-
-#define PUMP_COMMAND 4
-#define PUMP_PARAMETER 0
-#define PUMP_FREQ .4
-#define PUMP_RATE .01
-// 180/256
-#define PUMP_CYCLE_RATE 0.703125
+#define SPLASH_COMMAND 1
+#define LOCATION_PARAMETER 0
 
 #define SCREEN_SAVER_COMMAND 5
 #define SCREEN_SAVER_PARAMETER 0
 
-#define CYCLE_ADV 1
-// 2*pi/256
-#define CYCLE_FREQ -0.0981747704
+#define LOCATIONS_SIZE 5
 
-#define DRUM_TIME 200
-#define DRUM_SUSTAIN 150
-#define DRUM_INIT_RADIUS 30.0
-#define DRUM_RATE 0.13
-#define DRUM_BORDER 10.0
-
-#define CYMBOL_DECAY 5000
-#define CYMBOL_SUSTAIN 500
-#define CYMBOL_FREQ .0008
 #define R_PHASE -.012
 #define G_PHASE -.0128
 #define B_PHASE -.0132
@@ -83,14 +59,10 @@ int rainbowColors[180];
 
 long lastRender = millis();
 long initTime = 0;
-long lastDrumHit[] = {0,0,0,0,0};
-int32_t drumColors[] = {0xfe0000, 0xf9fe00, 0x00fe30, 0x0003fe, 0x9d00fe};
-int cycle = 0;
 
-int cymbol = 0;
-long lastCymbolHit = 0;
-
-int pump = 0;
+int locations[LOCATIONS_SIZE];
+long locationTimes[LOCATIONS_SIZE];
+int locationPointer = 0;
 
 int state = INIT;
 
@@ -182,38 +154,12 @@ void readData() {
             resetCommand(); break;
         }
         break;
-      case CYCLE_COMMAND:
+      case SPLASH_COMMAND:
         switch (parameter) {
-          case CYCLE_PARAMETER:
-            cycle = value * CYCLE_ADV;
-            state = ACTIVE;
-          default:
-            resetCommand(); break;
-        }
-        break;
-      case DRUM_COMMAND:
-        switch (parameter) {
-          case DRUM_PARAMETER:
-            lastDrumHit[value] = millis();
-            state = ACTIVE;
-          default:
-            resetCommand(); break;
-        }
-        break;
-      case PUMP_COMMAND:
-        switch (parameter) {
-          case PUMP_PARAMETER:
-            pump = value;
-            state = ACTIVE;
-          default:
-            resetCommand(); break;
-        }
-        break;
-      case CYMBOLS_COMMAND:
-        switch (parameter) {
-          case CYMBOLS_PARAMETER:
-            cymbol = value;
-            lastCymbolHit = millis();
+          case LOCATION_PARAMETER:
+            locations[locationPointer] = value;
+            locationTimes[locationPointer] = millis();
+            locationPointer = (locationPointer+1) % LOCATIONS_SIZE;
             state = ACTIVE;
           default:
             resetCommand(); break;
@@ -274,62 +220,29 @@ long attackDecay(long time, long attack, long decay) {
 }
 
 void draw() {
-  long cymbolTime = millis()-lastCymbolHit;
-  int env = 0;
-  int cymbolDecay = map(cymbol, 0, 255, 0, CYMBOL_DECAY);
-  int cymbolSustain = map(cymbol, 0, 255, 0, CYMBOL_SUSTAIN);
-  if (cymbolTime < cymbolDecay) {
-    int val = (int) (1000.0 * cymbolTime / cymbolDecay);
-    env = map(val, 0, 1000, 1000, 0);
-  }
-  float cfreq = CYMBOL_FREQ * attackDecay(cymbolTime, 0, 2*cymbolDecay) / 1000.0;
 
   for(uint8_t column=0; column<NUM_STRIPS; column++) {
     int x = column;
     int xoffset = x * NUM_LEDS;
 
     for(uint16_t i=0; i<NUM_LEDS; i++) {
-      float dist = distances[xoffset + i];
+      float theta = 0.5+0.4*sin(-.005*millis() + 53*x+1.3*i);
+      int mix = (int) (1000*theta);
 
-      int pumpColor = rainbowColors[abs((int) (dist*PUMP_FREQ - (millis()-lastCymbolHit) * PUMP_RATE + cycle*PUMP_CYCLE_RATE))%180];
-      int baseColor = mixColor(map(pump,0,255,0,1000), 0x808080, pumpColor);
-      int pedalVal = (int) (500.0*(1.0+sin(CYCLE_FREQ*cycle + phases[xoffset + i])));
-      uint32_t color = mixColor(pedalVal, 0x000000, baseColor);
-
-      for(uint8_t drum=0; drum<5; drum++) {
-        long drumTime = millis() - lastDrumHit[drum];
-
-        if (drumTime <= DRUM_TIME) {
-          float drumDist = drumDistances[xoffset + i + drum*CONTROLED_LEDS];
-          float drumSize = drumTime * DRUM_RATE + DRUM_INIT_RADIUS;
-          if (drumDist < drumSize) {
-            int drumColor = drumDist > drumSize - DRUM_BORDER ? 0x000000 : drumColors[drum];
-            int drumVal = drumTime < DRUM_SUSTAIN ? 1000 : map(drumTime, DRUM_SUSTAIN, DRUM_TIME, 1000, 0);
-            color = mixColor(drumVal, color, drumColor);
-          }
+      long now = millis();
+      float c = 0;
+      for (int j=0; j<LOCATIONS_SIZE; j++) {
+        long delay = now - locationTimes[j];
+        if (delay >= 0 && delay < 10000) {
+          float t = delay / 33.0;
+          float dx = ((int) (locations[j]/50)) - x - offset;
+          float dy = (i - locations[j]%50)/3;
+          float r = sqrt(dx * dx + dy * dy);
+          c += min(1,5/t)*exp(-r*r/(2*t*t+0))*(.5 + .5*cos(-.1*t + 30*r/(1*t+40)));
         }
       }
-
-      // cymbol / stompbox
-      // Atack decay curve base on hit time
-      // 3 concentric sin waves, r, g and b
-      // Same freq, phase is a function of time * c, where c varies slightly for each
-      // for each wave, create a high colors from existing color, c: c|0xFF0000, c|0x00FF00, c|0x0000FF
-      // also create low colors: c&0x00FFFF, c&0xFF00FF, c&0xFFFF00
-      // if val=sin(freq*dist + cPhase*time) > 0, mixColor(val, c, highColor) otherwise mixColor(-val, c, lowColor)
-      // combine colors something like this:
-      if (env > 0) {
-        // this is not actually mixing to zero
-        // dist = distances[xoffset + (int) (NUM_LEDS/2)];
-        int rval = (int) (env*cos((cfreq*dist + R_PHASE)*cymbolTime));
-        int gval = (int) (env*cos((cfreq*dist + G_PHASE)*cymbolTime));
-        int bval = (int) (env*cos((cfreq*dist + B_PHASE)*cymbolTime));
-        uint32_t r = rval < 0 ? 0xff0000 : 0x000000;
-        uint32_t g = gval < 0 ? 0x00ff00 : 0x000000;
-        uint32_t b = bval < 0 ? 0x0000ff : 0x000000;
-        uint32_t stompColor = r | g | b;
-        color = cymbolTime < cymbolSustain ? stompColor : mixColor(map(cymbolTime,cymbolSustain,cymbolDecay,0,1000), stompColor, color);
-      }
+      // color = mixColor(((int) (1000*(0+.5*c))), 0x000000, 0xFFFFFF);
+      int color = mixColor(min(1000, mix + (int) (5000*c)), 0x456ad1, 0x0531cf);
 
       leds.setPixel(i+xoffset, color);
     }
